@@ -34,18 +34,20 @@ int main(int argc, const char *argv[])
 {
 
 	int num_args = argc;
-	if(num_args!=3)
+	if(num_args!=4)
 	{
 		cout<<"Incorrect argument number"<<endl<<endl;
 		cout<<"Usage: "<<endl;
 		cout<<"      feature_processing_gpu <Match selector type> <image_folder>"<<endl;
+		cout<<"Detector types: FAST , ORB"<<endl;
 		cout<<"Selector types: SEL_NN , SEL_KNN"<<endl;
 		cout<<"image_folder: the name of your image folder"<<endl;
 		return -1;
 	}
 
-	string selectorType = argv[1];
-	string img_folder = argv[2];
+	string detectorType = argv[1];
+	string selectorType = argv[2];
+	string img_folder = argv[3];
 
     /* INIT VARIABLES AND DATA STRUCTURES */
 
@@ -68,6 +70,8 @@ int main(int argc, const char *argv[])
     bool bVis = false;            // visualize results
 
     /* MAIN LOOP OVER ALL IMAGES */
+
+    double t;
 
     for (size_t imgIndex = 0; imgIndex <= imgEndIndex - imgStartIndex; imgIndex++)
     {
@@ -97,36 +101,55 @@ int main(int argc, const char *argv[])
         /* DETECT IMAGE KEYPOINTS */
 
         // extract 2D keypoints from current image
+
+        t = (double)cv::getTickCount();
+
         vector<cv::KeyPoint> keypoints; // create empty feature list for current image
         cv::Mat descriptors; // create empty feature list for current image
 
-
-        cv::Ptr<cv::cuda::ORB> orb = cuda::ORB::create(500, 1.2f, 8, 31, 0, 2, 0, 31, 20, true);
 
         cv::cuda::GpuMat gkeypoints; // this holds the keys detected
         cv::cuda::GpuMat gdescriptors; // this holds the descriptors for the detected keypoints
         cv::cuda::GpuMat mask1; // this holds any mask you may want to use, or can be replace by noArray() in the call below if no mask is needed
         cv::cuda::Stream istream;
 
-        orb->detectAndComputeAsync(frame.gpu_cameraImg, mask1, gkeypoints, gdescriptors, false, istream);
-        istream.waitForCompletion();
-        orb->convert(gkeypoints, keypoints);
+        if(detectorType.compare("ORB"))
+        {
+        	/*ORB*/
+            cv::Ptr<cv::cuda::ORB> orb = cuda::ORB::create(250, 1.2f, 8, 31, 0, 2, 0, 31, 20, true);
+            orb->detectAndComputeAsync(frame.gpu_cameraImg, mask1, gkeypoints, gdescriptors, false, istream);
+            istream.waitForCompletion();
+            orb->convert(gkeypoints, keypoints);
+
+        }
+        else
+        {
+        	/*FAST*/
+        	int threshold = 30;
+        	cv::Ptr<cv::cuda::FastFeatureDetector> fastdetector = cv::cuda::FastFeatureDetector::create(threshold, true, cv::FastFeatureDetector::TYPE_9_16);
+        	fastdetector->detectAndComputeAsync(frame.gpu_cameraImg, mask1, gkeypoints, gdescriptors, false, istream);
+        	istream.waitForCompletion();
+        	fastdetector->convert(gkeypoints, keypoints);
+
+        }
+
+
         gdescriptors.download(descriptors);
 
         // push keypoints and descriptor for current frame to end of data buffer
         (dataBuffer.end() - 1)->keypoints = keypoints;
         (dataBuffer.end() - 1)->gpu_keypoints = gkeypoints;
-        cout << "#2 : DETECT KEYPOINTS done" << endl;
-
-        /* EXTRACT KEYPOINT DESCRIPTORS */
 
         // push descriptors for current frame to end of data buffer
         (dataBuffer.end() - 1)->gpu_descriptors = gdescriptors;
 
-        cout << "#3 : EXTRACT DESCRIPTORS done" << endl;
+        t = ((double)cv::getTickCount() - t) / cv::getTickFrequency();
+        cout << "#2 : DETECT KEYPOINTS and DESCRIPTORS done " << keypoints.size() << " keypoints in " << 1000 * t / 1.0 << " ms" << endl;
 
         if (dataBuffer.size() > 1) // wait until at least two images have been processed
         {
+
+        	t = (double)cv::getTickCount();
 
             cv::Ptr<cuda::DescriptorMatcher> matcher = cv::cuda::DescriptorMatcher::createBFMatcher(cv::NORM_HAMMING);
 
@@ -156,6 +179,10 @@ int main(int argc, const char *argv[])
             }
 
 
+            t = ((double)cv::getTickCount() - t) / cv::getTickFrequency();
+            cout << "#3 : MATCH KEYPOINT DESCRIPTORS done " << matches.size() << " matches in " << 1000 * t / 1.0 << " ms" << endl;
+
+
             /*calculate displacement*/
             displacement_calculator displ_calc;
             vector<cv::Point2f> displacements;
@@ -168,7 +195,6 @@ int main(int argc, const char *argv[])
             (dataBuffer.end() - 1)->kptMatches = matches;
             (dataBuffer.end() - 1)->gpu_kptMatches = gmatches;
 
-            cout << "#4 : MATCH KEYPOINT DESCRIPTORS done" << endl<< endl<< endl<< endl;
 
             // visualize matches between current and previous image
             bVis = true;
