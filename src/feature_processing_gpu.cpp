@@ -34,22 +34,18 @@ int main(int argc, const char *argv[])
 {
 
 	int num_args = argc;
-	if(num_args!=5)
+	if(num_args!=3)
 	{
 		cout<<"Incorrect argument number"<<endl<<endl;
 		cout<<"Usage: "<<endl;
-		cout<<"      2D_feature_tracking <Detector type> <Descriptor type> <Match selector type>"<<endl;
-		cout<<"Detector types: SHITOMASI , HARRIS , FAST , BRISK , ORB, AKAZE , SIFT"<<endl;
-		cout<<"Descriptor types: BRISK , BRIEF , ORB , FREAK , AKAZE , SIFT"<<endl;
+		cout<<"      feature_processing_gpu <Match selector type> <image_folder>"<<endl;
 		cout<<"Selector types: SEL_NN , SEL_KNN"<<endl;
-		cout<<"Note: you can only use AKAZE detector with AKAZE descriptor, so don't mix AKAZE det/desc with oher options"<<endl;
+		cout<<"image_folder: the name of your image folder"<<endl;
 		return -1;
 	}
 
-	string detectorType = argv[1];
-	string descriptorType = argv[2];
-	string selectorType = argv[3];
-	string img_folder = argv[4];
+	string selectorType = argv[1];
+	string img_folder = argv[2];
 
     /* INIT VARIABLES AND DATA STRUCTURES */
 
@@ -93,6 +89,7 @@ int main(int argc, const char *argv[])
 
         DataFrame frame;
         frame.cameraImg = imgGray;
+        frame.gpu_cameraImg.upload(imgGray);
         dataBuffer.push_back(frame);
 
         cout << "#1 : LOAD IMAGE INTO BUFFER done" << endl;
@@ -101,88 +98,63 @@ int main(int argc, const char *argv[])
 
         // extract 2D keypoints from current image
         vector<cv::KeyPoint> keypoints; // create empty feature list for current image
+        cv::Mat descriptors; // create empty feature list for current image
 
-        if (detectorType.compare("SHITOMASI") == 0)
-        {
-            detKeypointsShiTomasi(keypoints, imgGray, false);
-        }
-        else
-        {
-        	if (detectorType.compare("HARRIS") == 0)
-        	{
-        		detKeypointsHarris(keypoints, imgGray, false);
-        	}
-        	else
-        	{
-        		detKeypointsModern(keypoints, imgGray, detectorType, false);
-        	}
-        }
 
-/*
-        bool bFocusOnVehicle = false;
-        cv::Rect vehicleRect(535, 180, 180, 150);
-        if (bFocusOnVehicle)
-        {
-        	vector<cv::KeyPoint> inVehicleKeypoints;
-            for(auto it = keypoints.begin(); it != keypoints.end(); it++)
-            {
-            	if( vehicleRect.contains(it->pt))
-            	{
-            		inVehicleKeypoints.push_back(*it);
-            	}
-            }
+        cv::Ptr<cv::cuda::ORB> orb = cuda::ORB::create(500, 1.2f, 8, 31, 0, 2, 0, 31, 20, true);
 
-            keypoints = inVehicleKeypoints;
-            cout << " -----> Number of Keypoints on the preceding vehic: "<< keypoints.size() << endl;
-        }
-*/
-        // optional : limit number of keypoints (helpful for debugging and learning)
-        bool bLimitKpts = true;
-        if (bLimitKpts)
-        {
-            int maxKeypoints = 250;
-            if (detectorType.compare("SHITOMASI") == 0)
-            { // there is no response info, so keep the first 50 as they are sorted in descending quality order
-                keypoints.erase(keypoints.begin() + maxKeypoints, keypoints.end());
-            }
-            cv::KeyPointsFilter::retainBest(keypoints, maxKeypoints);
-            cout << " NOTE: Keypoints have been limited!" << endl;
-        }
+        cv::cuda::GpuMat gkeypoints; // this holds the keys detected
+        cv::cuda::GpuMat gdescriptors; // this holds the descriptors for the detected keypoints
+        cv::cuda::GpuMat mask1; // this holds any mask you may want to use, or can be replace by noArray() in the call below if no mask is needed
+        cv::cuda::Stream istream;
+
+        orb->detectAndComputeAsync(frame.gpu_cameraImg, mask1, gkeypoints, gdescriptors, false, istream);
+        istream.waitForCompletion();
+        orb->convert(gkeypoints, keypoints);
+        gdescriptors.download(descriptors);
 
         // push keypoints and descriptor for current frame to end of data buffer
         (dataBuffer.end() - 1)->keypoints = keypoints;
+        (dataBuffer.end() - 1)->gpu_keypoints = gkeypoints;
         cout << "#2 : DETECT KEYPOINTS done" << endl;
 
         /* EXTRACT KEYPOINT DESCRIPTORS */
 
-        cv::Mat descriptors;
-
-        descKeypoints((dataBuffer.end() - 1)->keypoints, (dataBuffer.end() - 1)->cameraImg, descriptors, descriptorType);
-
         // push descriptors for current frame to end of data buffer
-        (dataBuffer.end() - 1)->descriptors = descriptors;
+        (dataBuffer.end() - 1)->gpu_descriptors = gdescriptors;
 
         cout << "#3 : EXTRACT DESCRIPTORS done" << endl;
 
         if (dataBuffer.size() > 1) // wait until at least two images have been processed
         {
+
+            cv::Ptr<cuda::DescriptorMatcher> matcher = cv::cuda::DescriptorMatcher::createBFMatcher(cv::NORM_HAMMING);
+
+            cv:cuda::GpuMat gmatches;
+            vector< DMatch > matches;
+
             /* MATCH KEYPOINT DESCRIPTORS */
-            vector<cv::DMatch> matches;
-            string matcherType = "MAT_BF";        // MAT_BF, MAT_FLANN
-            string descriptorFamily; 			  // DES_BINARY, DES_HOG
-            if( (descriptorType.compare("SIFT")==0) || (descriptorType.compare("AKAZE")==0))
+            if (selectorType.compare("SEL_KNN") == 0)
             {
-            	descriptorFamily = "DES_HOG";
+            	cv::cuda::GpuMat gknnMatches;
+            	vector<vector<DMatch>> knnMatches;
+            	matcher->knnMatchAsync( (dataBuffer.end() - 2)->gpu_descriptors, (dataBuffer.end() - 1)->gpu_descriptors, gknnMatches, 2, noArray(), istream);
+            	matcher->knnMatchConvert(gknnMatches, knnMatches);
+            	double minDescDistRatio = 0.8;
+            	for(auto it = knnMatches.begin(); it!=knnMatches.end(); it++)
+            	{
+            		if((*it)[0].distance < minDescDistRatio*( (*it)[1].distance ) )
+            		{
+            			matches.push_back((*it)[0]);
+            		}
+            	}
             }
             else
             {
-            	descriptorFamily = "DES_BINARY";
+            	matcher->matchAsync( (dataBuffer.end() - 2)->gpu_descriptors, (dataBuffer.end() - 1)->gpu_descriptors, gmatches, noArray(), istream);
+            	matcher->matchConvert(gmatches, matches);
             }
 
-
-            matchDescriptors((dataBuffer.end() - 2)->keypoints, (dataBuffer.end() - 1)->keypoints,
-                             (dataBuffer.end() - 2)->descriptors, (dataBuffer.end() - 1)->descriptors,
-                             matches, descriptorFamily, matcherType, selectorType);
 
             /*calculate displacement*/
             displacement_calculator displ_calc;
@@ -192,9 +164,9 @@ int main(int argc, const char *argv[])
             t = ((double)cv::getTickCount() - t) / cv::getTickFrequency();
             cout << "******* displacement calculation done in " << 1000 * t / 1.0 << " ms" << endl;
 
-
             // store matches in current data frame
             (dataBuffer.end() - 1)->kptMatches = matches;
+            (dataBuffer.end() - 1)->gpu_kptMatches = gmatches;
 
             cout << "#4 : MATCH KEYPOINT DESCRIPTORS done" << endl<< endl<< endl<< endl;
 
@@ -203,6 +175,7 @@ int main(int argc, const char *argv[])
             if (bVis)
             {
                 cv::Mat matchImg = ((dataBuffer.end() - 1)->cameraImg).clone();
+
                 cv::drawMatches((dataBuffer.end() - 2)->cameraImg, (dataBuffer.end() - 2)->keypoints,
                                 (dataBuffer.end() - 1)->cameraImg, (dataBuffer.end() - 1)->keypoints,
                                 matches, matchImg,
