@@ -25,7 +25,7 @@ void displacement_calculator::calc_displacements(std::vector<cv::KeyPoint> &kPts
 
 		displacements.push_back(cv::Point2f(delta_x, delta_y));
 
-		std::cout<<"delta_x: "<< delta_x << "  delta_y: " << delta_y << "  delta_ratio: "<< delta_ratio << std::endl;
+		//std::cout<<"delta_x: "<< delta_x << "  delta_y: " << delta_y << "  delta_ratio: "<< delta_ratio << std::endl;
 
 	}
 }

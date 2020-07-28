@@ -85,7 +85,6 @@ int main(int argc, const char *argv[])
 
         cout <<"image full name: "<<imgFullFilename<< endl;
 
-
         // load image from file and convert to grayscale
         cv::Mat img, imgGray;
         img = cv::imread(imgFullFilename);
@@ -102,8 +101,6 @@ int main(int argc, const char *argv[])
 
         // extract 2D keypoints from current image
 
-        t = (double)cv::getTickCount();
-
         vector<cv::KeyPoint> keypoints; // create empty feature list for current image
         cv::Mat descriptors; // create empty feature list for current image
 
@@ -117,20 +114,24 @@ int main(int argc, const char *argv[])
         {
         	/*ORB*/
             cv::Ptr<cv::cuda::ORB> orb = cuda::ORB::create(250, 1.2f, 8, 31, 0, 2, 0, 31, 20, true);
+            t = (double)cv::getTickCount();
             orb->detectAndComputeAsync(frame.gpu_cameraImg, mask1, gkeypoints, gdescriptors, false, istream);
             istream.waitForCompletion();
+            t = ((double)cv::getTickCount() - t) / cv::getTickFrequency();
             orb->convert(gkeypoints, keypoints);
-
+            cout << "#2 : DETECT KEYPOINTS and DESCRIPTORS done " << keypoints.size() << " keypoints in " << 1000 * t / 1.0 << " ms" << endl;
         }
         else
         {
         	/*FAST*/
         	int threshold = 30;
         	cv::Ptr<cv::cuda::FastFeatureDetector> fastdetector = cv::cuda::FastFeatureDetector::create(threshold, true, cv::FastFeatureDetector::TYPE_9_16);
+        	t = (double)cv::getTickCount();
         	fastdetector->detectAndComputeAsync(frame.gpu_cameraImg, mask1, gkeypoints, gdescriptors, false, istream);
         	istream.waitForCompletion();
+            t = ((double)cv::getTickCount() - t) / cv::getTickFrequency();
         	fastdetector->convert(gkeypoints, keypoints);
-
+        	cout << "#2 : DETECT KEYPOINTS and DESCRIPTORS done " << keypoints.size() << " keypoints in " << 1000 * t / 1.0 << " ms" << endl;
         }
 
 
@@ -143,18 +144,14 @@ int main(int argc, const char *argv[])
         // push descriptors for current frame to end of data buffer
         (dataBuffer.end() - 1)->gpu_descriptors = gdescriptors;
 
-        t = ((double)cv::getTickCount() - t) / cv::getTickFrequency();
-        cout << "#2 : DETECT KEYPOINTS and DESCRIPTORS done " << keypoints.size() << " keypoints in " << 1000 * t / 1.0 << " ms" << endl;
 
         if (dataBuffer.size() > 1) // wait until at least two images have been processed
         {
-
-        	t = (double)cv::getTickCount();
-
             cv::Ptr<cuda::DescriptorMatcher> matcher = cv::cuda::DescriptorMatcher::createBFMatcher(cv::NORM_HAMMING);
-
             cv:cuda::GpuMat gmatches;
             vector< DMatch > matches;
+
+            t = (double)cv::getTickCount();
 
             /* MATCH KEYPOINT DESCRIPTORS */
             if (selectorType.compare("SEL_KNN") == 0)
