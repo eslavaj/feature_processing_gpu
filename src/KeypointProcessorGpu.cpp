@@ -11,8 +11,10 @@
 #include <opencv2/features2d.hpp>
 #include <opencv2/xfeatures2d.hpp>
 #include <opencv2/xfeatures2d/nonfree.hpp>
+#include <opencv2/calib3d.hpp>
 
 #include "KeypointProcessorGpu.hpp"
+#include "displacement_calculator.hpp"
 
 using namespace std;
 
@@ -78,17 +80,17 @@ void KeypointProcessorGpu::extractKpointDescriptors(cv::Mat & newImage)
 }
 
 
-void KeypointProcessorGpu::matchKpoints()
+void KeypointProcessorGpu::matchKpoints(string mpointStrategy)
 {
 	/*To measure time*/
 	double t;
 	cv::cuda::Stream istream;
+	vector< cv::DMatch > matches;
 
     if (m_dataFrameBuffer.size() > 1) // wait until at least two images have been processed
     {
         cv::Ptr<cv::cuda::DescriptorMatcher> matcher = cv::cuda::DescriptorMatcher::createBFMatcher(cv::NORM_HAMMING);
         cv::cuda::GpuMat gmatches;
-        vector< cv::DMatch > matches;
 
         t = (double)cv::getTickCount();
 
@@ -117,15 +119,30 @@ void KeypointProcessorGpu::matchKpoints()
         t = ((double)cv::getTickCount() - t) / cv::getTickFrequency();
         cout << "#3 : MATCH KEYPOINT DESCRIPTORS done " << matches.size() << " matches in " << 1000 * t / 1.0 << " ms" << endl;
 
+        if(mpointStrategy.compare("NONE") != 0)
+        {
+        	vector< cv::DMatch > ransacCorrtedMatches;
+        	t = (double)cv::getTickCount();
+            /*Do RANSAC test*/
+            refineMatches(matches, (m_dataFrameBuffer.end() - 2)->keypoints, (m_dataFrameBuffer.end() - 1)->keypoints, ransacCorrtedMatches, mpointStrategy);
+            t = ((double)cv::getTickCount() - t) / cv::getTickFrequency();
+            cout << "#4 : REFINE MATCHES DONE " << ransacCorrtedMatches.size() << " matches in " << 1000 * t / 1.0 << " ms" << endl;
+            matches = ransacCorrtedMatches;
+        }
+        else
+        {
+        	/*TODO*/
+        }
+
         /*calculate displacement*/
-        /*
+
         displacement_calculator displ_calc;
         vector<cv::Point2f> displacements;
         double t = (double)cv::getTickCount();
-        displ_calc.calc_displacements((dataBuffer.end() - 2)->keypoints, (dataBuffer.end() - 1)->keypoints,matches, displacements);
+        displ_calc.calc_displacements((m_dataFrameBuffer.end() - 2)->keypoints, (m_dataFrameBuffer.end() - 1)->keypoints,matches, displacements);
         t = ((double)cv::getTickCount() - t) / cv::getTickFrequency();
         cout << "******* displacement calculation done in " << 1000 * t / 1.0 << " ms" << endl;
-         */
+
 
         // store matches in current data frame
         (m_dataFrameBuffer.end() - 1)->kptMatches = matches;
@@ -151,7 +168,127 @@ void KeypointProcessorGpu::matchKpoints()
     }
 }
 
+// Identify good matches using RANSAC
+// Return fundamental matrix and output matches
+void KeypointProcessorGpu::refineMatches(const std::vector<cv::DMatch>& matches,
+	                 std::vector<cv::KeyPoint>& keypoints1,
+					 std::vector<cv::KeyPoint>& keypoints2,
+				     std::vector<cv::DMatch>& outMatches, string matchRefineStrategy) {
+
+	// Convert keypoints into Point2f
+	std::vector<cv::Point2f> points1, points2;
+	cv::Mat outMatrix;
+
+	for (std::vector<cv::DMatch>::const_iterator it= matches.begin(); it!= matches.end(); ++it)
+	{
+		// Get the position of left keypoints
+		points1.push_back(keypoints1[it->queryIdx].pt);
+		// Get the position of right keypoints
+		points2.push_back(keypoints2[it->trainIdx].pt);
+	}
+
+	// Compute F matrix using RANSAC
+	std::vector<uchar> inliers(points1.size(),0);
+
+	if(matchRefineStrategy.compare("FUND")==0)
+	{
+		outMatrix= cv::findFundamentalMat(
+				points1,points2, // matching points
+				inliers,         // match status (inlier or outlier)
+				cv::FM_RANSAC,   // RANSAC method
+				m_distToEpipLine,        // distance to epipolar line
+				m_ransacConfid);     // confidence probability
+	}
+	else if (matchRefineStrategy.compare("HOMOGR")==0)
+	{
+		outMatrix = cv::findHomography(
+				points1,points2, // corresponding points
+				inliers,	     // outputed inliers matches
+				cv::RANSAC,	     // RANSAC method
+				m_distToEpipLine);// max distance to reprojection point
+	}
+	else
+	{
+		/*Other cases TODO*/
+	}
+
+	// extract the surviving (inliers) matches
+	std::vector<uchar>::const_iterator itIn= inliers.begin();
+	std::vector<cv::DMatch>::const_iterator itM= matches.begin();
+	// for all matches
+	for ( ;itIn!= inliers.end(); ++itIn, ++itM)
+	{
+		if (*itIn)
+		{ // it is a valid match
+			outMatches.push_back(*itM);
+		}
+	}
+
+	if(matchRefineStrategy.compare("FUND")==0)
+	{
+		if (m_refineFund || m_refineMatches)
+		{
+			// The F matrix will be recomputed with all accepted matches
+
+			// Convert keypoints into Point2f for final F computation
+			points1.clear();
+			points2.clear();
+
+			for (std::vector<cv::DMatch>::const_iterator it= outMatches.begin(); it!= outMatches.end(); ++it)
+			{
+				// Get the position of left keypoints
+				points1.push_back(keypoints1[it->queryIdx].pt);
+				// Get the position of right keypoints
+				points2.push_back(keypoints2[it->trainIdx].pt);
+			}
+
+			// Compute 8-point F from all accepted matches
+			outMatrix= cv::findFundamentalMat(
+					points1,points2, // matching points
+					cv::FM_8POINT); // 8-point method
+
+			if (m_refineMatches) {
+
+				std::vector<cv::Point2f> newPoints1, newPoints2;
+				// refine the matches
+				correctMatches(outMatrix,             // F matrix
+						points1, points2,        // original position
+						newPoints1, newPoints2); // new position
+
+				for (int i=0; i< points1.size(); i++)
+				{
+					/*
+					std::cout << "(" << keypoints1[outMatches[i].queryIdx].pt.x
+						      << "," << keypoints1[outMatches[i].queryIdx].pt.y
+							  << ") -> ";
+					std::cout << "(" << newPoints1[i].x
+						      << "," << newPoints1[i].y << std::endl;
+					std::cout << "(" << keypoints2[outMatches[i].trainIdx].pt.x
+						      << "," << keypoints2[outMatches[i].trainIdx].pt.y
+							  << ") -> ";
+					std::cout << "(" << newPoints2[i].x
+						      << "," << newPoints2[i].y <<")"<< std::endl;
+					 */
+					keypoints1[outMatches[i].queryIdx].pt.x= newPoints1[i].x;
+					keypoints1[outMatches[i].queryIdx].pt.y= newPoints1[i].y;
+					keypoints2[outMatches[i].trainIdx].pt.x= newPoints2[i].x;
+					keypoints2[outMatches[i].trainIdx].pt.y= newPoints2[i].y;
+				}
+			}
+
+			m_fundMatrix = outMatrix;
+		}
+	}
+	else if(matchRefineStrategy.compare("HOMOGR")==0)
+	{
+		/*HOMOGRAPHY */
+		m_homographyMatrix = outMatrix;
+	}
+	else
+	{
+		/*Other cases TODO*/
+	}
 
 
-
+}
 

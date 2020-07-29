@@ -34,20 +34,22 @@ using namespace std;
 int main(int argc, const char *argv[])
 {
 	int num_args = argc;
-	if(num_args!=4)
+	if(num_args!=5)
 	{
 		cout<<"Incorrect argument number"<<endl<<endl;
 		cout<<"Usage: "<<endl;
 		cout<<"      feature_processing_gpu <Match selector type> <image_folder>"<<endl;
 		cout<<"Detector types: FAST , ORB"<<endl;
 		cout<<"Selector types: SEL_NN , SEL_KNN"<<endl;
+		cout<<"Match point refining strategy: FUND , HOMOGR, AUTO, NONE"<<endl;
 		cout<<"image_folder: the name of your image folder"<<endl;
 		return -1;
 	}
 
 	string detectorType = argv[1];
 	string selectorType = argv[2];
-	string img_folder = argv[3];
+	string mpointStrat = argv[3];
+	string img_folder = argv[4];
 
     /* INIT VARIABLES AND DATA STRUCTURES */
     // data location
@@ -81,7 +83,7 @@ int main(int argc, const char *argv[])
     	img = cv::imread(imgFullFilename);
 
     	pointProcGPU.extractKpointDescriptors(img);
-    	pointProcGPU.matchKpoints();
+    	pointProcGPU.matchKpoints(mpointStrat);
 
     } // eof loop over all images
 

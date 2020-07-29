@@ -31,7 +31,12 @@ public:
 	//virtual ~KeypointProcessorGpu();
 
 	void extractKpointDescriptors(cv::Mat & newImage);
-	void matchKpoints();
+	void matchKpoints(std::string mpointStrategy="FUND");
+	void refineMatches(const std::vector<cv::DMatch>& matches,
+		                 std::vector<cv::KeyPoint>& keypoints1,
+						 std::vector<cv::KeyPoint>& keypoints2,
+					     std::vector<cv::DMatch>& outMatches,
+						 std::string matchRefineStrategy);
 
 
 private:
@@ -39,7 +44,12 @@ private:
 	std::string m_detectorType;
 	std::string m_selectorType;
 	bool m_visuEnable;
-
+	cv::Mat m_fundMatrix;
+	cv::Mat m_homographyMatrix;
+	double m_distToEpipLine = 1.0;
+	double m_ransacConfid = 0.98;
+	bool m_refineFund = true; /*Refine fundamental matrix*/
+	bool m_refineMatches = true; /*Refine the matches*/
 
 
 
