@@ -5,21 +5,16 @@
  *      Author: jeslava
  */
 
-
 #include <vector>
-
 #include <opencv2/core.hpp>
 #include "opencv2/opencv.hpp"
 #include <opencv2/features2d.hpp>
 #include <opencv2/xfeatures2d.hpp>
 #include <opencv2/xfeatures2d/nonfree.hpp>
 
-
 #include "KeypointProcessorGpu.hpp"
 
-
 using namespace std;
-
 
 void KeypointProcessorGpu::extractKpointDescriptors(cv::Mat & newImage)
 {
