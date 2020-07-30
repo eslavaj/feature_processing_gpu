@@ -13,7 +13,7 @@
 #include <iostream>
 #include <math.h>
 
-
+/* This function does not work*/
 void displacement_calculator::calc_displacements(std::vector<cv::KeyPoint> &kPtsQuery, std::vector<cv::KeyPoint> &kPtsTrain, std::vector<cv::DMatch> &matches,
 							std::vector<cv::Point2f> & displacements)
 {
@@ -31,16 +31,37 @@ void displacement_calculator::calc_displacements(std::vector<cv::KeyPoint> &kPts
 	}
 }
 
+/* This function does not work*/
+void displacement_calculator::calcDisplacWithVertCorr(std::vector<cv::KeyPoint> &kPtsQuery, std::vector<cv::KeyPoint> &kPtsTrain, std::vector<cv::DMatch> &matches,
+							std::vector<cv::Point2f> & displacements, float relVertDisplacement)
+{
 
+
+	for(auto match : matches)
+	{
+		float delta_x = (kPtsQuery[match.queryIdx].pt.x -300)/relVertDisplacement - (kPtsTrain[match.trainIdx].pt.x - 300);
+		float delta_y = (kPtsQuery[match.queryIdx].pt.y + 300)/relVertDisplacement - (kPtsTrain[match.trainIdx].pt.y + 300);
+		float delta_ratio = delta_y/delta_x;
+
+		displacements.push_back(cv::Point2f(delta_x, delta_y));
+
+		//std::cout<<"delta_x: "<< delta_x << "  delta_y: " << delta_y << "  delta_ratio: "<< delta_ratio << std::endl;
+
+	}
+}
 
 
 void displacement_calculator::calcRelatVertDisplacement(std::vector<cv::KeyPoint> &kPtsQuery, std::vector<cv::KeyPoint> &kPtsTrain, std::vector<cv::DMatch> &matches,
-							       std::vector<float> & relVertDisplacement)
+							       float & vertRatioMedia)
 {
+	/*TODO: optimize this function, currently vertical relative displacement are computed twice*/
+	/*TODO: Manage operations with results close or equal to zero/infinite */
+
 	float gCenterQuery_x = 0;
 	float gCenterQuery_y = 0;
 	float gCenterTrain_x = 0;
 	float gCenterTrain_y = 0;
+	std::vector<float> ratios_tmp;
 
 	/*Calculate gravity center of matched keypoints*/
 	for(auto match : matches)
@@ -64,13 +85,28 @@ void displacement_calculator::calcRelatVertDisplacement(std::vector<cv::KeyPoint
 		float distQuerySqr =  powf(kPtsQuery[match.queryIdx].pt.x - gCenterQuery_x, 2) + powf(kPtsQuery[match.queryIdx].pt.y - gCenterQuery_y, 2);
 		float distTrainSqr =  powf(kPtsTrain[match.trainIdx].pt.x - gCenterTrain_x, 2) + powf(kPtsTrain[match.trainIdx].pt.y - gCenterTrain_y, 2);
 		float relVertRatio = sqrtf(distQuerySqr/distTrainSqr);
-		relVertDisplacement.push_back(relVertRatio);
-		std::cout<<"vertical displaement ratio: "<< relVertRatio << std::endl;
+		ratios_tmp.push_back(relVertRatio);
+		//std::cout<<"vertical displacement ratio: "<< relVertRatio << std::endl;
 	}
+
+	/*Calculate median*/
+	std::sort(ratios_tmp.begin(), ratios_tmp.end());
+	int ratios_nbr = ratios_tmp.size();
+	if(ratios_nbr%2 == 0)
+	{
+		vertRatioMedia = (ratios_tmp[ratios_nbr/2] + ratios_tmp[ratios_nbr/2+1])/2;
+	}
+	else
+	{
+		vertRatioMedia = ratios_tmp[ int(ratios_nbr/2) + 1];
+	}
+
+	std::cout<<" vertical displacement ratio: "<< vertRatioMedia << std::endl;
 
 }
 
 
+/* This function does not work*/
 void displacement_calculator::calc_displacements1(std::vector<cv::KeyPoint> &kPtsQuery, std::vector<cv::KeyPoint> &kPtsTrain, std::vector<cv::DMatch> &matches,
 							std::vector<cv::Point2f> & displacements)
 {
@@ -88,6 +124,8 @@ void displacement_calculator::calc_displacements1(std::vector<cv::KeyPoint> &kPt
 	}
 }
 
+
+/* This function does not work*/
 void displacement_calculator::calc_displacements2(std::vector<cv::KeyPoint> &kPtsQuery, std::vector<cv::KeyPoint> &kPtsTrain, std::vector<cv::DMatch> &matches,
 							std::vector<cv::Point2f> & displacements)
 {

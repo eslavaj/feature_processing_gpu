@@ -28,7 +28,10 @@ public:
 							 std::vector<cv::Point2f> & displacements);
 
 	void calcRelatVertDisplacement(std::vector<cv::KeyPoint> &kPtsQuery, std::vector<cv::KeyPoint> &kPtsTrain, std::vector<cv::DMatch> &matches,
-							       std::vector<float> & relVertDisplacement);
+								  float& vertRatioMedia);
+
+	void calcDisplacWithVertCorr(std::vector<cv::KeyPoint> &kPtsQuery, std::vector<cv::KeyPoint> &kPtsTrain, std::vector<cv::DMatch> &matches,
+								std::vector<cv::Point2f> & displacements, float vertRatioMedia);
 
 };
 
