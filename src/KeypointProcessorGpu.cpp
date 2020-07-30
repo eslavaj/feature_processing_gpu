@@ -138,8 +138,10 @@ void KeypointProcessorGpu::matchKpoints(string mpointStrategy)
 
         displacement_calculator displ_calc;
         vector<cv::Point2f> displacements;
+        vector<float> relVerticalRatios;
         double t = (double)cv::getTickCount();
         displ_calc.calc_displacements((m_dataFrameBuffer.end() - 2)->keypoints, (m_dataFrameBuffer.end() - 1)->keypoints,matches, displacements);
+        displ_calc.calcRelatVertDisplacement((m_dataFrameBuffer.end() - 2)->keypoints, (m_dataFrameBuffer.end() - 1)->keypoints,matches, relVerticalRatios);
         t = ((double)cv::getTickCount() - t) / cv::getTickFrequency();
         cout << "******* displacement calculation done in " << 1000 * t / 1.0 << " ms" << endl;
 

@@ -18,14 +18,17 @@ class displacement_calculator
 public:
 	displacement_calculator(){};
 
-	void calc_displacements(std::vector<cv::KeyPoint> &kPtsSource, std::vector<cv::KeyPoint> &kPtsRef, std::vector<cv::DMatch> &matches,
+	void calc_displacements(std::vector<cv::KeyPoint> &kPtsQuery, std::vector<cv::KeyPoint> &kPtsTrain, std::vector<cv::DMatch> &matches,
 							std::vector<cv::Point2f> & displacements);
 
 	void calc_displacements1(std::vector<cv::KeyPoint> &kPtsSource, std::vector<cv::KeyPoint> &kPtsRef, std::vector<cv::DMatch> &matches,
-							std::vector<cv::Point2f> & displacements);
+							 std::vector<cv::Point2f> & displacements);
 
 	void calc_displacements2(std::vector<cv::KeyPoint> &kPtsSource, std::vector<cv::KeyPoint> &kPtsRef, std::vector<cv::DMatch> &matches,
-							std::vector<cv::Point2f> & displacements);
+							 std::vector<cv::Point2f> & displacements);
+
+	void calcRelatVertDisplacement(std::vector<cv::KeyPoint> &kPtsQuery, std::vector<cv::KeyPoint> &kPtsTrain, std::vector<cv::DMatch> &matches,
+							       std::vector<float> & relVertDisplacement);
 
 };
 
