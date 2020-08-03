@@ -17,8 +17,49 @@
 #include "dataStructures.h"
 
 
+
+namespace RefineReturnCode
+{
+enum RefineReturnCode
+{
+	OK = 0,
+	NOT_ENOUGH_INLIERS = -1,
+
+};
+}
+
+
+
+namespace ExtractReturnCode
+{
+enum ExtractReturnCode
+{
+	OK = 0,
+	NOT_ENOUGH_KEYPOINTS = -1,
+
+};
+}
+
+namespace FrameSTS
+{
+enum FrameSTS
+{
+	DISCARDED = -1,
+	NOT_YET_PROCESSED = 0,
+	PROCESSED = 1
+};
+}
+
+
+
+
+
+
+
+
 class KeypointProcessorGpu
 {
+
 
 public:
 	KeypointProcessorGpu(boost::circular_buffer<DataFrame> &dataFrameBuffer, std::string detectorType, std::string selectorType, bool visuEnable):
@@ -30,9 +71,9 @@ public:
 
 	//virtual ~KeypointProcessorGpu();
 
-	void extractKpointDescriptors(cv::Mat & newImage);
+	ExtractReturnCode::ExtractReturnCode extractKpointDescriptors(cv::Mat & newImage);
 	void matchKpoints(std::string mpointStrategy="FUND");
-	void refineMatches(const std::vector<cv::DMatch>& matches,
+	RefineReturnCode::RefineReturnCode refineMatches(const std::vector<cv::DMatch>& matches,
 		                 std::vector<cv::KeyPoint>& keypoints1,
 						 std::vector<cv::KeyPoint>& keypoints2,
 					     std::vector<cv::DMatch>& outMatches,
@@ -50,6 +91,12 @@ private:
 	double m_ransacConfid = 0.98;
 	bool m_refineFund = true; /*Refine fundamental matrix*/
 	bool m_refineMatches = true; /*Refine the matches*/
+	bool m_calcRelVertDisp = false; /*If true then algorithm will calculate relative vertical displacement assuming
+	 	 	 	 	 	 	 	 	 that camera orientation is constant between 2 consecutive images.
+	 	 	 	 	 	 	 	 	 This function is useful only for tests under specific conditions (constant camera orientation)*/
+
+	FrameSTS::FrameSTS previousFrameSts = FrameSTS::NOT_YET_PROCESSED;
+
 
 
 

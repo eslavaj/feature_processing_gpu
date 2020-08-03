@@ -14,29 +14,26 @@
 #include <opencv2/calib3d.hpp>
 
 #include "KeypointProcessorGpu.hpp"
-#include "displacement_calculator.hpp"
 
 using namespace std;
 
-void KeypointProcessorGpu::extractKpointDescriptors(cv::Mat & newImage)
+ExtractReturnCode::ExtractReturnCode KeypointProcessorGpu::extractKpointDescriptors(cv::Mat & newImage)
 {
 	/*To measure time*/
 	double t;
-
+	DataFrame frame;
 	/*Convert to grayscale*/
     cv::Mat imgGray;
-    cv::cvtColor(newImage, imgGray, cv::COLOR_BGR2GRAY);
+    cv::cvtColor(newImage, frame.cameraImg, cv::COLOR_BGR2GRAY);
 
-    DataFrame frame;
-    frame.cameraImg = imgGray;
-    frame.gpu_cameraImg.upload(imgGray);
-    m_dataFrameBuffer.push_back(frame);
+    //frame.cameraImg = imgGray;
+    frame.gpu_cameraImg.upload(frame.cameraImg);
+    //m_dataFrameBuffer.push_back(frame);
 
     cout << "#1 : LOAD IMAGE INTO BUFFER done" << endl;
 
     vector<cv::KeyPoint> keypoints; // create empty feature list for current image
     cv::Mat descriptors; // create empty feature list for current image
-
     cv::cuda::GpuMat gkeypoints; // this holds the keys detected
     cv::cuda::GpuMat gdescriptors; // this holds the descriptors for the detected keypoints
     cv::cuda::GpuMat mask1; // this holds any mask you may want to use, or can be replace by noArray() in the call below if no mask is needed
@@ -66,17 +63,26 @@ void KeypointProcessorGpu::extractKpointDescriptors(cv::Mat & newImage)
     	cout << "#2 : DETECT KEYPOINTS and DESCRIPTORS done " << keypoints.size() << " keypoints in " << 1000 * t / 1.0 << " ms" << endl;
     }
 
-
     gdescriptors.download(descriptors);
 
+    /*Don't use this frame if it has not enough keypoints*/
+    if(keypoints.size() < 35)
+    {
+    	return ExtractReturnCode::NOT_ENOUGH_KEYPOINTS;
+    }
+
     // push keypoints and descriptor for current frame to end of data buffer
-    (m_dataFrameBuffer.end() - 1)->keypoints = keypoints;
-    (m_dataFrameBuffer.end() - 1)->gpu_keypoints = gkeypoints;
+    //(m_dataFrameBuffer.end() - 1)->keypoints = keypoints;
+    frame.keypoints = keypoints;
+    frame.gpu_keypoints = gkeypoints.clone();
 
     // push descriptors for current frame to end of data buffer
-    (m_dataFrameBuffer.end() - 1)->gpu_descriptors = gdescriptors;
+    frame.gpu_descriptors = gdescriptors.clone();
+    frame.descriptors = descriptors.clone();
 
+    m_dataFrameBuffer.push_back(frame);
 
+    return ExtractReturnCode::OK;
 }
 
 
@@ -90,6 +96,8 @@ void KeypointProcessorGpu::matchKpoints(string mpointStrategy)
     if (m_dataFrameBuffer.size() > 1) // wait until at least two images have been processed
     {
         cv::Ptr<cv::cuda::DescriptorMatcher> matcher = cv::cuda::DescriptorMatcher::createBFMatcher(cv::NORM_HAMMING);
+        //cv::Ptr<cv::DescriptorMatcher> matcher = cv::DescriptorMatcher::create(cv::DescriptorMatcher::BRUTEFORCE_HAMMING);
+
         cv::cuda::GpuMat gmatches;
 
         t = (double)cv::getTickCount();
@@ -99,8 +107,10 @@ void KeypointProcessorGpu::matchKpoints(string mpointStrategy)
         {
         	cv::cuda::GpuMat gknnMatches;
         	vector<vector<cv::DMatch>> knnMatches;
-        	matcher->knnMatchAsync( (m_dataFrameBuffer.end() - 2)->gpu_descriptors, (m_dataFrameBuffer.end() - 1)->gpu_descriptors, gknnMatches, 6, cv::noArray(), istream);
+            matcher->knnMatchAsync( (m_dataFrameBuffer.end() - 2)->gpu_descriptors, (m_dataFrameBuffer.end() - 1)->gpu_descriptors, gknnMatches, 2, cv::noArray(), istream);
+        	istream.waitForCompletion();
         	matcher->knnMatchConvert(gknnMatches, knnMatches);
+
         	double minDescDistRatio = 0.8;
         	for(auto it = knnMatches.begin(); it!=knnMatches.end(); it++)
         	{
@@ -113,18 +123,31 @@ void KeypointProcessorGpu::matchKpoints(string mpointStrategy)
         else
         {
         	matcher->matchAsync( (m_dataFrameBuffer.end() - 2)->gpu_descriptors, (m_dataFrameBuffer.end() - 1)->gpu_descriptors, gmatches, cv::noArray(), istream);
+        	istream.waitForCompletion();
         	matcher->matchConvert(gmatches, matches);
         }
 
         t = ((double)cv::getTickCount() - t) / cv::getTickFrequency();
         cout << "#3 : MATCH KEYPOINT DESCRIPTORS done " << matches.size() << " matches in " << 1000 * t / 1.0 << " ms" << endl;
 
+    	if(matches.size() < 8)
+    	{
+    		cout << "################################ There is not enough matches ignore this frame ################################" << endl;
+    		m_dataFrameBuffer.clear();
+    		return;
+    	}
+
         if(mpointStrategy.compare("NONE") != 0)
         {
         	vector< cv::DMatch > ransacCorrtedMatches;
         	t = (double)cv::getTickCount();
             /*Do RANSAC test*/
-            refineMatches(matches, (m_dataFrameBuffer.end() - 2)->keypoints, (m_dataFrameBuffer.end() - 1)->keypoints, ransacCorrtedMatches, mpointStrategy);
+            if(refineMatches(matches, (m_dataFrameBuffer.end() - 2)->keypoints, (m_dataFrameBuffer.end() - 1)->keypoints, ransacCorrtedMatches, mpointStrategy) !=
+            		RefineReturnCode::OK)
+            {
+            	m_dataFrameBuffer.clear();
+            	return;
+            }
             t = ((double)cv::getTickCount() - t) / cv::getTickFrequency();
             cout << "#4 : REFINE MATCHES DONE " << ransacCorrtedMatches.size() << " matches in " << 1000 * t / 1.0 << " ms" << endl;
             matches = ransacCorrtedMatches;
@@ -134,22 +157,9 @@ void KeypointProcessorGpu::matchKpoints(string mpointStrategy)
         	/*TODO*/
         }
 
-        /*calculate displacement*/
-
-        displacement_calculator displ_calc;
-        vector<cv::Point2f> displacements;
-        float relVerticalRatios;
-        double t = (double)cv::getTickCount();
-        displ_calc.calcRelatVertDisplacement((m_dataFrameBuffer.end() - 2)->keypoints, (m_dataFrameBuffer.end() - 1)->keypoints,matches, relVerticalRatios);
-        //displ_calc.calc_displacements((m_dataFrameBuffer.end() - 2)->keypoints, (m_dataFrameBuffer.end() - 1)->keypoints,matches, displacements);
-        displ_calc.calcDisplacWithVertCorr((m_dataFrameBuffer.end() - 2)->keypoints, (m_dataFrameBuffer.end() - 1)->keypoints,matches, displacements, relVerticalRatios);
-        t = ((double)cv::getTickCount() - t) / cv::getTickFrequency();
-        cout << "******* displacement calculation done in " << 1000 * t / 1.0 << " ms" << endl;
-
-
         // store matches in current data frame
         (m_dataFrameBuffer.end() - 1)->kptMatches = matches;
-        (m_dataFrameBuffer.end() - 1)->gpu_kptMatches = gmatches;
+        (m_dataFrameBuffer.end() - 1)->gpu_kptMatches = gmatches.clone();
 
         // visualize matches between current and previous image
         if (m_visuEnable)
@@ -163,7 +173,7 @@ void KeypointProcessorGpu::matchKpoints(string mpointStrategy)
                             vector<char>(), cv::DrawMatchesFlags::DRAW_RICH_KEYPOINTS);
 
             string windowName = "Matching keypoints between two camera images";
-            cv::namedWindow(windowName, 7);
+            cv::namedWindow(windowName, cv::WINDOW_NORMAL | cv::WINDOW_KEEPRATIO);
             cv::imshow(windowName, matchImg);
             cout << "Press key to continue to next image" << endl;
             cv::waitKey(0); // wait for key to be pressed
@@ -173,7 +183,7 @@ void KeypointProcessorGpu::matchKpoints(string mpointStrategy)
 
 // Identify good matches using RANSAC
 // Return fundamental matrix and output matches
-void KeypointProcessorGpu::refineMatches(const std::vector<cv::DMatch>& matches,
+RefineReturnCode::RefineReturnCode KeypointProcessorGpu::refineMatches(const std::vector<cv::DMatch>& matches,
 	                 std::vector<cv::KeyPoint>& keypoints1,
 					 std::vector<cv::KeyPoint>& keypoints2,
 				     std::vector<cv::DMatch>& outMatches, string matchRefineStrategy) {
@@ -182,8 +192,14 @@ void KeypointProcessorGpu::refineMatches(const std::vector<cv::DMatch>& matches,
 	std::vector<cv::Point2f> points1, points2;
 	cv::Mat outMatrix;
 
-	for (std::vector<cv::DMatch>::const_iterator it= matches.begin(); it!= matches.end(); ++it)
+	for (std::vector<cv::DMatch>::const_iterator it= matches.begin(); it!= matches.end(); it++)
 	{
+		if(it->queryIdx<0)
+		{
+			cout<< "it->queryIdx: "<< it->queryIdx<<endl;
+			cout<< "it->trainIdx: "<< it->trainIdx<<endl;
+		}
+
 		// Get the position of left keypoints
 		points1.push_back(keypoints1[it->queryIdx].pt);
 		// Get the position of right keypoints
@@ -195,12 +211,14 @@ void KeypointProcessorGpu::refineMatches(const std::vector<cv::DMatch>& matches,
 
 	if(matchRefineStrategy.compare("FUND")==0)
 	{
+
 		outMatrix= cv::findFundamentalMat(
 				points1,points2, // matching points
 				inliers,         // match status (inlier or outlier)
 				cv::FM_RANSAC,   // RANSAC method
 				m_distToEpipLine,        // distance to epipolar line
 				m_ransacConfid);     // confidence probability
+
 	}
 	else if (matchRefineStrategy.compare("HOMOGR")==0)
 	{
@@ -227,12 +245,17 @@ void KeypointProcessorGpu::refineMatches(const std::vector<cv::DMatch>& matches,
 		}
 	}
 
+	/*Check if there is enough inliers to recalculate Fundamental Matrix*/
+	if(outMatches.size() < 8)
+	{
+		return RefineReturnCode::NOT_ENOUGH_INLIERS;
+	}
+
 	if(matchRefineStrategy.compare("FUND")==0)
 	{
 		if (m_refineFund || m_refineMatches)
 		{
 			// The F matrix will be recomputed with all accepted matches
-
 			// Convert keypoints into Point2f for final F computation
 			points1.clear();
 			points2.clear();
@@ -254,6 +277,7 @@ void KeypointProcessorGpu::refineMatches(const std::vector<cv::DMatch>& matches,
 
 				std::vector<cv::Point2f> newPoints1, newPoints2;
 				// refine the matches
+
 				correctMatches(outMatrix,             // F matrix
 						points1, points2,        // original position
 						newPoints1, newPoints2); // new position
@@ -279,19 +303,19 @@ void KeypointProcessorGpu::refineMatches(const std::vector<cv::DMatch>& matches,
 				}
 			}
 
-			m_fundMatrix = outMatrix;
+			m_fundMatrix = outMatrix.clone();
 		}
 	}
 	else if(matchRefineStrategy.compare("HOMOGR")==0)
 	{
 		/*HOMOGRAPHY */
-		m_homographyMatrix = outMatrix;
+		m_homographyMatrix = outMatrix.clone();
 	}
 	else
 	{
 		/*Other cases TODO*/
 	}
 
-
+	return RefineReturnCode::OK;
 }
 
