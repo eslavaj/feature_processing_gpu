@@ -13,6 +13,7 @@
 #include <opencv2/xfeatures2d/nonfree.hpp>
 #include <opencv2/calib3d.hpp>
 
+#include "displacement_calculator.hpp"
 #include "KeypointProcessorGpu.hpp"
 
 using namespace std;
@@ -156,6 +157,19 @@ void KeypointProcessorGpu::matchKpoints(string mpointStrategy)
         {
         	/*TODO*/
         }
+
+#if 0
+        /*calculate displacement*/
+        displacement_calculator displ_calc;
+        vector<cv::Point2f> displacements;
+        float relVerticalRatios;
+        double t = (double)cv::getTickCount();
+        displ_calc.calcRelatVertDisplacement((m_dataFrameBuffer.end() - 2)->keypoints, (m_dataFrameBuffer.end() - 1)->keypoints,matches, relVerticalRatios);
+        //displ_calc.calc_displacements((m_dataFrameBuffer.end() - 2)->keypoints, (m_dataFrameBuffer.end() - 1)->keypoints,matches, displacements);
+        //displ_calc.calcDisplacWithVertCorr((m_dataFrameBuffer.end() - 2)->keypoints, (m_dataFrameBuffer.end() - 1)->keypoints,matches, displacements, relVerticalRatios);
+        t = ((double)cv::getTickCount() - t) / cv::getTickFrequency();
+        cout << "******* displacement calculation done in " << 1000 * t / 1.0 << " ms" << endl;
+#endif
 
         // store matches in current data frame
         (m_dataFrameBuffer.end() - 1)->kptMatches = matches;
